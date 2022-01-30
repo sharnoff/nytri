@@ -1,0 +1,12 @@
+[package]
+name = "nytri"
+version = "0.0.0"
+edition = "2021"
+description = "A low-level regex library with a focus on user-control"
+repository = "https://github.com/sharnoff/nytri"
+license = "AGPL-3.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+thiserror = "1.0.30"
