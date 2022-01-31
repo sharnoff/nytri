@@ -2,7 +2,9 @@
 
 use super::error::{HelpMsg, SyntaxError, SyntaxErrorKind};
 use super::{Ast, AstNode, AstNodeId, AstNodeKind, Span};
+use std::iter::Peekable;
 use std::mem;
+use std::str::CharIndices;
 
 /// Helper macro for defining patterns that match a set of characters
 macro_rules! char_pat {
@@ -50,7 +52,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
     let mut stack: Vec<PartialNode> = vec![];
 
     // An iterator over characters *and their span*
-    let mut chars = char_ranges(pattern).peekable();
+    let mut chars = CharPeeker::new(pattern);
 
     let reserved_chars = &['|', '(', ')'];
     let is_special_char = |c| reserved_chars.contains(&c);
@@ -64,15 +66,15 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
     }
 
     loop {
-        let consume = match (chars.peek(), stack.as_mut_slice()) {
+        let consume = match (chars.peek2(), stack.as_mut_slice()) {
             // ----- Success & end-Errors -----
 
             // Success condition: If we get to the end of the input with a single completed
             // node, then we finished our AST
-            (None, [Node(id)]) => return Ok(Ast { root: *id, nodes }),
+            ([], [Node(id)]) => return Ok(Ast { root: *id, nodes }),
 
             // The string was empty. We shouldn't be given empty strings.
-            (None, []) => {
+            ([], []) => {
                 return Err(SyntaxError {
                     span: Span { start: 0, end: 0 },
                     msg: SyntaxErrorKind::EmptyPattern,
@@ -81,7 +83,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             }
 
             // Unclosed parenthesis
-            (None, [.., Group { start_span }] | [.., Group { start_span }, Node(_)]) => {
+            ([], [.., Group { start_span }] | [.., Group { start_span }, Node(_)]) => {
                 return Err(SyntaxError {
                     span: *start_span,
                     msg: SyntaxErrorKind::UnclosedDelim { name: "parenthesis" },
@@ -95,13 +97,13 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             // ----- Literal -----
 
             // shift: Literal + * -> Literal  (special case for efficiency)
-            (Some((sp, c)), [.., Literal { span }]) if !is_special_char(*c) => {
+            ([(sp, c), ..], [.., Literal { span }]) if !is_special_char(*c) => {
                 *span = span.join(*sp);
                 Consume::Yes
             }
 
             // shift: * -> Literal
-            (Some((span, c)), _) if !is_special_char(*c) => {
+            ([(span, c), ..], _) if !is_special_char(*c) => {
                 stack.push(Literal { span: *span });
                 Consume::Yes
             }
@@ -140,7 +142,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             }
 
             // reduce: Concat -> Node
-            (None | Some((_, ends_concat!())), [.., Concat(n_ids)]) => {
+            ([] | [(_, ends_concat!()), ..], [.., Concat(n_ids)]) => {
                 let fst = n_ids.first().unwrap();
                 let lst = n_ids.last().unwrap();
                 let node = AstNode {
@@ -169,7 +171,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             }
 
             // shift: Node + "|" -> Alternate
-            (Some((span, '|')), [.., Node(id)]) => {
+            ([(span, '|'), ..], [.., Node(id)]) => {
                 let span = nodes[id.0].span.join(*span);
                 let alt = Alternate {
                     span,
@@ -183,7 +185,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             }
 
             // shift: [group start] + "|" -> Alternate
-            (Some((span, '|')), [.., Group { .. }] | []) => {
+            ([(span, '|'), ..], [.., Group { .. }] | []) => {
                 let alt = Alternate {
                     span: *span,
                     alts: vec![None], // single alt for the empty start
@@ -194,14 +196,14 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             }
 
             // shift: Alternate (nonempty end) + "|" -> Alternate (empty end)
-            (Some((p, '|')), [.., Alternate { span, trailing_pipe, .. }]) if !*trailing_pipe => {
+            ([(p, '|'), ..], [.., Alternate { span, trailing_pipe, .. }]) if !*trailing_pipe => {
                 *span = span.join(*p);
                 *trailing_pipe = true;
                 Consume::Yes
             }
 
             // reduce: Alternate -> Node
-            (None | Some((_, ends_alt!())), [.., Alternate { span, alts, trailing_pipe }]) => {
+            ([] | [(_, ends_alt!()), ..], [.., Alternate { span, alts, trailing_pipe }]) => {
                 if *trailing_pipe {
                     alts.push(None);
                 }
@@ -222,13 +224,13 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             // ----- Group -----
 
             // shift: '(' -> Group
-            (Some((span, '(')), _) => {
+            ([(span, '('), ..], _) => {
                 stack.push(Group { start_span: *span });
                 Consume::Yes
             }
 
             // shift: Group + Node + ')' -> Node
-            (Some((span, ')')), [.., Group { start_span }, Node(id)]) => {
+            ([(span, ')'), ..], [.., Group { start_span }, Node(id)]) => {
                 let node = AstNode {
                     span: start_span.join(*span),
                     kind: AstNodeKind::Group(Some(*id)),
@@ -244,7 +246,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             }
 
             // shift: Group + ')' -> Node
-            (Some((span, ')')), [.., Group { start_span }]) => {
+            ([(span, ')'), ..], [.., Group { start_span }]) => {
                 let node = AstNode {
                     span: start_span.join(*span),
                     kind: AstNodeKind::Group(None),
@@ -261,7 +263,7 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
             // ----- Errors -----
 
             // * + ')' -> Error
-            (Some((span, ')')), _) => {
+            ([(span, ')'), ..], _) => {
                 return Err(SyntaxError {
                     span: *span,
                     msg: SyntaxErrorKind::UnexpectedCloseDelim { name: "parenthesis" },
@@ -283,34 +285,62 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
         };
 
         if let Consume::Yes = consume {
-            chars.next();
+            chars.consume();
         }
     }
 }
 
-fn char_ranges(string: &str) -> impl '_ + Iterator<Item = (Span, char)> {
-    use std::str::CharIndices;
+struct CharPeeker<'s> {
+    original_len: usize,
+    next_len: usize,
+    next: [(Span, char); 2],
+    chars: Peekable<CharIndices<'s>>,
+}
 
-    struct Iter<'s> {
-        original_len: usize,
-        next: Option<(usize, char)>,
-        chars: CharIndices<'s>,
+const DEFAULT_NEXT: (Span, char) = (Span { start: usize::MAX, end: usize::MAX }, '\0');
+
+impl<'s> CharPeeker<'s> {
+    fn new(string: &'s str) -> Self {
+        let original_len = string.len();
+        let mut next = [DEFAULT_NEXT; 2];
+        let mut chars = string.char_indices().peekable();
+
+        let mut next_len = 0;
+
+        if let Some((x_start, x_ch)) = chars.next() {
+            let x_end = match chars.next() {
+                None => original_len,
+                Some((y_start, y_ch)) => {
+                    let y_end = chars.peek().map(|&(idx, _)| idx).unwrap_or(original_len);
+                    next[1] = (Span { start: y_start, end: y_end }, y_ch);
+                    next_len += 1;
+                    y_start
+                }
+            };
+
+            next_len += 1;
+            next[0] = (Span { start: x_start, end: x_end }, x_ch);
+        }
+
+        CharPeeker { original_len, next_len, next, chars }
     }
 
-    impl<'s> Iterator for Iter<'s> {
-        type Item = (Span, char);
+    fn peek2(&self) -> &[(Span, char)] {
+        &self.next[..self.next_len]
+    }
 
-        fn next(&mut self) -> Option<Self::Item> {
-            let (start, c) = self.next?;
-            self.next = self.chars.next();
-
-            let end = self.next.map(|(i, _)| i).unwrap_or(self.original_len);
-            Some((Span { start, end }, c))
+    /// Marks the next character as consumed, advancing the items in `peek2` by one
+    fn consume(&mut self) {
+        self.next = [self.next[1], DEFAULT_NEXT];
+        if let Some((start, ch)) = self.chars.next() {
+            let end = self
+                .chars
+                .peek()
+                .map(|&(idx, _)| idx)
+                .unwrap_or(self.original_len);
+            self.next[1] = (Span { start, end }, ch);
+        } else {
+            self.next_len -= 1;
         }
     }
-
-    let mut chars = string.char_indices();
-    let next = chars.next();
-
-    Iter { original_len: string.len(), next, chars }
 }
