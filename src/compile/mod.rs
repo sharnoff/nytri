@@ -42,12 +42,27 @@ pub enum AstNodeKind<'pat> {
     // Note: the list will always have >= 2 entries, though entries equal to `None` *are* included
     // in this count.
     Alternate(Vec<Option<AstNodeId>>),
+    Optional(AstNodeId),
+    ZeroOrMore(AstNodeId),
+    OneOrMore(AstNodeId),
 }
 
 impl<'pat> Ast<'pat> {
     /// Returns a reference to the root node of the AST
     pub fn root(&self) -> &AstNode {
         &self[self.root]
+    }
+}
+
+impl<'pat> AstNode<'pat> {
+    /// Returns whether the AST node corresponds to a postfix operator
+    pub fn is_postfix(&self) -> bool {
+        use AstNodeKind::*;
+
+        match &self.kind {
+            Optional(_) | ZeroOrMore(_) | OneOrMore(_) => true,
+            Literal(_) | Group(_) | Concat(_) | Alternate(_) => false,
+        }
     }
 }
 
@@ -115,7 +130,7 @@ impl<'pat> Debug for Ast<'pat> {
 
         impl<'a, 'p> Debug for DebugNodeKind<'a, 'p> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                use AstNodeKind::{Alternate, Concat, Group, Literal};
+                use AstNodeKind::*;
 
                 match &self.1 {
                     Literal(pat) => f.debug_tuple("Literal").field(pat).finish(),
@@ -139,6 +154,18 @@ impl<'pat> Debug for Ast<'pat> {
 
                         f.debug_tuple("Alternate").field(&nodes).finish()
                     }
+                    Optional(id) => f
+                        .debug_tuple("Optional")
+                        .field(&DebugNode(&self.0, *id))
+                        .finish(),
+                    ZeroOrMore(id) => f
+                        .debug_tuple("ZeroOrMore")
+                        .field(&DebugNode(&self.0, *id))
+                        .finish(),
+                    OneOrMore(id) => f
+                        .debug_tuple("OneOrMore")
+                        .field(&DebugNode(&self.0, *id))
+                        .finish(),
                 }
             }
         }
@@ -161,7 +188,7 @@ impl<'p1, 'p2> PartialEq<Ast<'p2>> for Ast<'p1> {
         //
         // We implemented this with a stack because it was more fun :P
 
-        use AstNodeKind::{Alternate, Concat, Group, Literal};
+        use AstNodeKind::*;
 
         let mut nodes_stack = vec![(&self[self.root], &other[other.root])];
 
@@ -195,6 +222,11 @@ impl<'p1, 'p2> PartialEq<Ast<'p2>> for Ast<'p1> {
                         }
                     }
                 }
+                (Optional(x_id), Optional(y_id)) => nodes_stack.push((&self[x_id], &other[y_id])),
+                (ZeroOrMore(x_id), ZeroOrMore(y_id)) => {
+                    nodes_stack.push((&self[x_id], &other[y_id]))
+                }
+                (OneOrMore(x_id), OneOrMore(y_id)) => nodes_stack.push((&self[x_id], &other[y_id])),
 
                 _ => return false,
             }

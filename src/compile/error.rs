@@ -56,6 +56,12 @@ pub enum SyntaxErrorKind {
     UnclosedDelim { name: &'static str }, // help: EscapeToMatchLiteral
     #[error("unexpected close {name}")]
     UnexpectedCloseDelim { name: &'static str }, // help: EscapeToMatchLiteral
+    #[error("unexpected postfix operator")]
+    UnexpectedPostfix,
+    // double postfix operators are currently illegal because we're going to use '<.>?' in the
+    // future for non-greedy matching, and that shouldn't be backwards-incompatible.
+    #[error("double postfix operators are not currently allowed")]
+    DoublePostfixOp, // help: [ NonGreedyMatchersUnimplemented ]
 }
 
 /// A help message, either to a programmer or Regex writer
@@ -68,6 +74,8 @@ pub enum SyntaxErrorKind {
 pub enum HelpMsg {
     #[error("to match a literal {name}, use '{escaped}'")]
     EscapeToMatchLiteral { name: &'static str, escaped: &'static str },
+    #[error("non-greedy matchers have not yet been implemented")]
+    NonGreedyMatchersUnimplemented,
 }
 
 impl HelpMsg {
@@ -77,7 +85,9 @@ impl HelpMsg {
     /// with different configurations.
     pub fn kind(&self) -> HelpKind {
         match self {
-            HelpMsg::EscapeToMatchLiteral { .. } => HelpKind::RegexWriter,
+            HelpMsg::EscapeToMatchLiteral { .. } | HelpMsg::NonGreedyMatchersUnimplemented => {
+                HelpKind::RegexWriter
+            }
         }
     }
 }

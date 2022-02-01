@@ -28,10 +28,12 @@ Planned:
 
 * [ ] Error display options & configuration
 * [ ] Syntax:
-    * [ ] All of: `.`, `*`, `+`, and `?` — with the standard meanings.
+    * [x] Repetition operators: `*`, `+`, and `?` — with the standard meanings.
+    * [ ] Wildcard (`.`)
     * [ ] Character escapes
     * [ ] (ASCII) Character classes
     * [ ] Unicode character classes
+    * [ ] Greedy vs. Non-greedy matching, with `*?`/`+?`/`??`
 * [ ] Matcher configuration — will be clarified in the future
 * [ ] Extracting capture groups (Named and unnamed)
     * [ ] Possible: intentionally don't capture certain groups, for efficiency.

@@ -26,10 +26,41 @@ static TEST_CASES: &[(&str, &[(bool, &[&str])])] = &[
             "abc",
         ]),
     ]),
+    ("ab?c", &[
+        (true, &[
+            "abc",
+            "ac",
+        ]),
+        (false, &[
+            "ab",
+            "bc",
+            "abbc",
+        ]),
+    ]),
+    ("a(b|c)*d", &[
+        (true, &[
+            "ad",
+            "abd",
+            "acbd",
+        ]),
+        (false, &[
+            "acc",
+        ]),
+    ]),
+    ("a(b|c)+d", &[
+        (true, &[
+            "abd",
+            "acbd",
+        ]),
+        (false, &[
+            "ad",
+            "acc",
+        ]),
+    ]),
 ];
 
 #[test]
-fn all() {
+fn simple_matches_exact() {
     for &(pat, cases) in TEST_CASES {
         let re =
             Regex::new(pat).expect(&format!("could not construct regex for pattern {:?}", pat));

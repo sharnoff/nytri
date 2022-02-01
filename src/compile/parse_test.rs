@@ -82,6 +82,15 @@ macro_rules! ast {
     (@AstNodeKind $ns:ident Alternate($($inner:tt)*)) => {
         super::AstNodeKind::Alternate(ast!(@Vec<Option<AstNode>> $ns $($inner)*))
     };
+    (@AstNodeKind $ns:ident Optional($($inner:tt)*)) => {
+        super::AstNodeKind::Optional(ast!(@AstNode $ns $($inner)*))
+    };
+    (@AstNodeKind $ns:ident ZeroOrMore($($inner:tt)*)) => {
+        super::AstNodeKind::ZeroOrMore(ast!(@AstNode $ns $($inner)*))
+    };
+    (@AstNodeKind $ns:ident OneOrMore($($inner:tt)*)) => {
+        super::AstNodeKind::OneOrMore(ast!(@AstNode $ns $($inner)*))
+    };
 }
 
 // "foobar"
@@ -301,6 +310,70 @@ fn alt_groups_empty() {
     assert_eq!(parse(pat), Ok(expected));
 }
 
+// ab?c
+#[test]
+fn optional() {
+    let pat = "ab?c";
+
+    let expected = ast!(Ast {
+        root: AstNode {
+            span: Span { start: 0, end: 4 },
+            kind: Concat(vec![
+                AstNode {
+                    span: Span { start: 0, end: 1 },
+                    kind: Literal("a"),
+                },
+                AstNode {
+                    span: Span { start: 1, end: 3 },
+                    kind: Optional(AstNode {
+                        span: Span { start: 1, end: 2 },
+                        kind: Literal("b"),
+                    }),
+                },
+                AstNode {
+                    span: Span { start: 3, end: 4 },
+                    kind: Literal("c"),
+                },
+            ]),
+        }
+    });
+
+    assert_eq!(parse(pat), Ok(expected));
+}
+
+#[test]
+fn oneormore_group() {
+    let pat = "a(bc)+d";
+
+    let expected = ast!(Ast {
+        root: AstNode {
+            span: Span { start: 0, end: 7 },
+            kind: Concat(vec![
+                AstNode {
+                    span: Span { start: 0, end: 1 },
+                    kind: Literal("a"),
+                },
+                AstNode {
+                    span: Span { start: 1, end: 6 },
+                    kind: OneOrMore(AstNode {
+                        span: Span { start: 1, end: 5 },
+                        kind: Group(Some(AstNode {
+                            span: Span { start: 2, end: 4 },
+                            kind: Literal("bc"),
+                        })),
+                    }),
+                },
+                AstNode {
+                    span: Span { start: 6, end: 7 },
+                    kind: Literal("d"),
+                },
+            ]),
+        }
+    });
+
+    assert_eq!(parse(pat), Ok(expected));
+}
+
 // ""
 #[test]
 fn empty_pat_error() {
@@ -324,6 +397,45 @@ fn unclosed_paren_error() {
         span: Span { start: 3, end: 4 },
         msg: SyntaxErrorKind::UnclosedDelim { name: "parenthesis" },
         help: &[HelpMsg::EscapeToMatchLiteral { name: "open parenthesis", escaped: r"\(" }],
+    };
+
+    assert_eq!(parse(pat), Err(expected_err));
+}
+
+#[test]
+fn question_plus_error() {
+    let pat = "ab?+c";
+
+    let expected_err = SyntaxError {
+        span: Span { start: 3, end: 4 },
+        msg: SyntaxErrorKind::DoublePostfixOp,
+        help: &[],
+    };
+
+    assert_eq!(parse(pat), Err(expected_err));
+}
+
+#[test]
+fn plus_at_start_error() {
+    let pat = "+abc";
+
+    let expected_err = SyntaxError {
+        span: Span { start: 0, end: 1 },
+        msg: SyntaxErrorKind::UnexpectedPostfix,
+        help: &[HelpMsg::EscapeToMatchLiteral { name: "plus", escaped: r"\+" }],
+    };
+
+    assert_eq!(parse(pat), Err(expected_err));
+}
+
+#[test]
+fn star_after_alt_error() {
+    let pat = "a|b|*";
+
+    let expected_err = SyntaxError {
+        span: Span { start: 4, end: 5 },
+        msg: SyntaxErrorKind::UnexpectedPostfix,
+        help: &[HelpMsg::EscapeToMatchLiteral { name: "asterisk", escaped: r"\*" }],
     };
 
     assert_eq!(parse(pat), Err(expected_err));

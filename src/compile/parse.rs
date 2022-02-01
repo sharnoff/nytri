@@ -54,9 +54,10 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
     // An iterator over characters *and their span*
     let mut chars = CharPeeker::new(pattern);
 
-    let reserved_chars = &['|', '(', ')'];
+    let reserved_chars = &['|', '(', ')', '?', '*', '+'];
     let is_special_char = |c| reserved_chars.contains(&c);
 
+    char_pat!(macro_rules! strong_postfix = '?', '*', '+');
     char_pat!(macro_rules! ends_concat = '|', ')');
     char_pat!(macro_rules! ends_alt = ')');
 
@@ -94,25 +95,25 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
                 })
             }
 
-            // ----- Literal -----
+            // ----- Postfix ops -----
 
-            // shift: Literal + * -> Literal  (special case for efficiency)
-            ([(sp, c), ..], [.., Literal { span }]) if !is_special_char(*c) => {
-                *span = span.join(*sp);
-                Consume::Yes
-            }
+            // shift: Node + '?' -> Node (Optional)
+            ([(sp, '?'), ..], [.., Node(id)]) => {
+                let child = &nodes[id.0];
 
-            // shift: * -> Literal
-            ([(span, c), ..], _) if !is_special_char(*c) => {
-                stack.push(Literal { span: *span });
-                Consume::Yes
-            }
+                // Check that this isn't being added on top of an existing postfix operator. In the
+                // future, this *will* be an option, for non-greedy operators, but not yet.
+                if child.is_postfix() {
+                    return Err(SyntaxError {
+                        span: *sp,
+                        msg: SyntaxErrorKind::DoublePostfixOp,
+                        help: &[HelpMsg::NonGreedyMatchersUnimplemented],
+                    });
+                }
 
-            // reduce: Literal -> Node
-            (_, [.., Literal { span }]) => {
                 let node = AstNode {
-                    span: *span,
-                    kind: AstNodeKind::Literal(&pattern[span.start..span.end]),
+                    span: sp.join(child.span),
+                    kind: AstNodeKind::Optional(*id),
                 };
 
                 let id = AstNodeId(nodes.len());
@@ -120,7 +121,57 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
 
                 stack.pop();
                 stack.push(Node(id));
-                Consume::No
+                Consume::Yes
+            }
+
+            // shift: Node + '*' -> Node (ZeroOrMore)
+            ([(sp, '*'), ..], [.., Node(id)]) => {
+                let child = &nodes[id.0];
+
+                if child.is_postfix() {
+                    return Err(SyntaxError {
+                        span: *sp,
+                        msg: SyntaxErrorKind::DoublePostfixOp,
+                        help: &[],
+                    });
+                }
+
+                let node = AstNode {
+                    span: sp.join(child.span),
+                    kind: AstNodeKind::ZeroOrMore(*id),
+                };
+
+                let id = AstNodeId(nodes.len());
+                nodes.push(node);
+
+                stack.pop();
+                stack.push(Node(id));
+                Consume::Yes
+            }
+
+            // shift: Node + '+' -> Node (OneOrMore)
+            ([(sp, '+'), ..], [.., Node(id)]) => {
+                let child = &nodes[id.0];
+
+                if child.is_postfix() {
+                    return Err(SyntaxError {
+                        span: *sp,
+                        msg: SyntaxErrorKind::DoublePostfixOp,
+                        help: &[],
+                    });
+                }
+
+                let node = AstNode {
+                    span: sp.join(child.span),
+                    kind: AstNodeKind::OneOrMore(*id),
+                };
+
+                let id = AstNodeId(nodes.len());
+                nodes.push(node);
+
+                stack.pop();
+                stack.push(Node(id));
+                Consume::Yes
             }
 
             // ----- Concat -----
@@ -154,6 +205,57 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
                 nodes.push(node);
 
                 // Remove the existing Concat & replace it:
+                stack.pop();
+                stack.push(Node(id));
+                Consume::No
+            }
+
+            // ----- Literal -----
+
+            // shift: * -> Literal  (special case)
+            (
+                [(span, c), (_, strong_postfix!())],
+                []
+                | [.., Node(_) | Group { .. } | Concat(_) | Alternate { trailing_pipe: true, .. }],
+            ) if !is_special_char(*c) => {
+                stack.push(Literal { span: *span });
+                Consume::Yes
+            }
+
+            // shift: Literal + * -> Literal  (only if not followed by a postfix op)
+            ([(sp, c), (_, next), ..], [.., Literal { span }])
+                if !is_special_char(*c) && !matches!(next, strong_postfix!()) =>
+            {
+                *span = span.join(*sp);
+                Consume::Yes
+            }
+            ([(sp, c)], [.., Literal { span }]) if !is_special_char(*c) => {
+                *span = span.join(*sp);
+                Consume::Yes
+            }
+
+            // shfit: * -> Literal  (only if not followed by a postfix op)
+            ([(span, c), (_, next), ..], _)
+                if !is_special_char(*c) && !matches!(next, strong_postfix!()) =>
+            {
+                stack.push(Literal { span: *span });
+                Consume::Yes
+            }
+            ([(span, c)], _) if !is_special_char(*c) => {
+                stack.push(Literal { span: *span });
+                Consume::Yes
+            }
+
+            // reduce: Literal -> Node
+            (_, [.., Literal { span }]) => {
+                let node = AstNode {
+                    span: *span,
+                    kind: AstNodeKind::Literal(&pattern[span.start..span.end]),
+                };
+
+                let id = AstNodeId(nodes.len());
+                nodes.push(node);
+
                 stack.pop();
                 stack.push(Node(id));
                 Consume::No
@@ -278,6 +380,23 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
                         escaped: r"\)",
                     }],
                 })
+            }
+
+            ([(span, ch), ..], _) if matches!(ch, strong_postfix!()) => {
+                use HelpMsg::EscapeToMatchLiteral as Escape;
+
+                let help = match ch {
+                    '?' => &[Escape { name: "question mark", escaped: r"\?" }],
+                    '*' => &[Escape { name: "asterisk", escaped: r"\*" }],
+                    '+' => &[Escape { name: "plus", escaped: r"\+" }],
+                    _ => unreachable!(),
+                };
+
+                return Err(SyntaxError {
+                    span: *span,
+                    msg: SyntaxErrorKind::UnexpectedPostfix,
+                    help,
+                });
             }
 
             // ----- Nothing else applies -----

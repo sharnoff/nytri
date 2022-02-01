@@ -66,7 +66,20 @@ impl Nfa {
             //
             // Does nothing if `remaining` is empty.
             DoConcat { remaining: &'ast [AstNodeId] },
+            // Finish construction from an Optional node, splitting between `out` and the start of
+            // the child node
+            FinishOptional { out: StateId },
+            // Finish construction for ZeroOrMore/OneOrMore by replacing the left-hand split in the
+            // given state with the entrypoint for the child node.
+            //
+            // For OneOrMore, this state comes after the child node; for ZeroOrMore, it comes
+            // before. If `is_start` is true, replace the top of the state stack (i.e. the child
+            // node) with `state`.
+            TieRepeat { state: StateId, is_start: bool },
         }
+
+        // Marker value for state values that will be replaced later
+        const DUMMY_STATE_ID: StateId = StateId(usize::MAX);
 
         let mut states = vec![State::Match];
         let match_state = StateId(0);
@@ -79,8 +92,8 @@ impl Nfa {
         let mut state_stack = Vec::new();
 
         while let Some(instr) = instrs_stack.pop() {
-            use AstNodeKind::{Alternate, Concat, Group, Literal};
-            use Instruction::{CollectAlternate, DoConcat, PhantomLink, Visit};
+            use AstNodeKind::*;
+            use Instruction::*;
 
             match instr {
                 Visit { node, mut out } => match &node.kind {
@@ -113,6 +126,22 @@ impl Nfa {
                         state_stack.push(out);
                         instrs_stack.push(DoConcat { remaining: ids });
                     }
+                    Optional(id) => {
+                        instrs_stack.push(FinishOptional { out });
+                        instrs_stack.push(Visit { node: &ast[id], out });
+                    }
+                    ZeroOrMore(id) => {
+                        let rep_id = StateId(states.len());
+                        states.push(State::Split(DUMMY_STATE_ID, out));
+                        instrs_stack.push(TieRepeat { state: rep_id, is_start: true });
+                        instrs_stack.push(Visit { node: &ast[id], out: rep_id });
+                    }
+                    OneOrMore(id) => {
+                        let rep_id = StateId(states.len());
+                        states.push(State::Split(DUMMY_STATE_ID, out));
+                        instrs_stack.push(TieRepeat { state: rep_id, is_start: false });
+                        instrs_stack.push(Visit { node: &ast[id], out: rep_id });
+                    }
                 },
                 PhantomLink { state } => state_stack.push(state),
                 CollectAlternate { alts_count } => {
@@ -133,6 +162,29 @@ impl Nfa {
                     let out = state_stack.pop().unwrap();
                     instrs_stack.push(DoConcat { remaining });
                     instrs_stack.push(Visit { node: &ast[last], out });
+                }
+                FinishOptional { out } => {
+                    let child = state_stack.pop().unwrap();
+                    let id = StateId(states.len());
+                    states.push(State::Split(child, out));
+                    state_stack.push(id);
+                }
+                TieRepeat { state, is_start } => {
+                    let child = state_stack.pop().unwrap();
+                    match &mut states[state.0] {
+                        State::Split(dummy, _) => {
+                            debug_assert_eq!(*dummy, DUMMY_STATE_ID);
+                            *dummy = child;
+                        }
+                        _ => unreachable!(),
+                    }
+
+                    let start = match is_start {
+                        true => state,
+                        false => child,
+                    };
+
+                    state_stack.push(start);
                 }
             }
         }
