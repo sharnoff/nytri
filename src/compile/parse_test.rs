@@ -6,7 +6,7 @@ use super::{HelpMsg, Span, SyntaxError, SyntaxErrorKind};
 /// Helper macro for constructing abstract syntax trees — because all node references are
 /// represented as `AstNodeId`s, not boxed nodes.
 ///
-/// The sytnax is the same as standard struct initialization, with a few subtle differences to
+/// The sytnax is the same as standard struct initialization, with a couple subtle differences to
 /// note:
 ///
 ///  1. Embedded notes cannot refer to local variables. Things like `AstNodeKind::Literal` still
@@ -15,10 +15,6 @@ use super::{HelpMsg, Span, SyntaxError, SyntaxErrorKind};
 ///
 ///  2. `AstNodeKind` variants are identified manually, by name (without the leading
 ///     `AstNodeKind::`).
-///
-///  3. The `span` field of each `AstNode` may be written as `Span { start: <expr>, end: <expr> }`
-///     OR with the abbreviated `Range` syntax, i.e. `<start> .. <end>`. The range syntax will
-///     only work with literals or parenthesized expressions.
 ///
 /// For examples, have a look through the rest of this file — there's a number of them :)
 macro_rules! ast {
