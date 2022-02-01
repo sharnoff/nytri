@@ -195,9 +195,15 @@ pub fn parse(pattern: &str) -> Result<Ast, SyntaxError> {
                 Consume::Yes
             }
 
-            // shift: Alternate (nonempty end) + "|" -> Alternate (empty end)
-            ([(p, '|'), ..], [.., Alternate { span, trailing_pipe, .. }]) if !*trailing_pipe => {
+            // shift: Alternate + "|" -> Alternate (empty end)
+            ([(p, '|'), ..], [.., Alternate { alts, span, trailing_pipe }]) => {
                 *span = span.join(*p);
+                // If there was already a trailing pipe, then we just have an empty alternative
+                // here.
+                if *trailing_pipe {
+                    alts.push(None);
+                }
+
                 *trailing_pipe = true;
                 Consume::Yes
             }

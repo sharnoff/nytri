@@ -146,6 +146,31 @@ fn alt_double_empty() {
     assert_eq!(parse(pat), Ok(expected));
 }
 
+// "a||b"
+#[test]
+fn alt_double_pipe() {
+    let pat = "a||b";
+
+    let expected = ast!(Ast {
+        root: AstNode {
+            span: Span { start: 0, end: 4 },
+            kind: Alternate(vec![
+                Some(AstNode {
+                    span: Span { start: 0, end: 1 },
+                    kind: Literal("a"),
+                }),
+                None,
+                Some(AstNode {
+                    span: Span { start: 3, end: 4 },
+                    kind: Literal("b"),
+                }),
+            ]),
+        },
+    });
+
+    assert_eq!(parse(pat), Ok(expected));
+}
+
 // "(|)"
 #[test]
 fn alt_double_empty_in_group() {
